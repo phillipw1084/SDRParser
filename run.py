@@ -42,10 +42,17 @@ from sdrparser.protocols.base import DecodedFrame
 def _print_frame(frame: DecodedFrame) -> None:
     fields = "  |  ".join(f"{k}: {v}" for k, v in frame.header_fields)
     print(f"[{frame.protocol:4s}] {frame.kind.name:<8s} {fields}")
+    header_hex = frame.header_hex()
+    if header_hex:
+        print(f"         Header HEX   : {header_hex}")
     for mf in frame.mbe_frames:
         inter = " ".join(str(b) for b in mf.interleaved_bits)
         deint = " ".join(str(b) for b in mf.deinterleaved_bits)
+        inter_hex = mf.bits_hex("interleaved")
+        deint_hex = mf.bits_hex("deinterleaved")
         print(f"         MBE#{mf.frame_index} [{mf.frame_type.name}]")
+        print(f"           Interleaved HEX  : {inter_hex}")
+        print(f"           Deinterleaved HEX: {deint_hex}")
         print(f"           Interleaved  : {inter}")
         print(f"           Deinterleaved: {deint}")
 

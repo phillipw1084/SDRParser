@@ -3,7 +3,7 @@
 A Python application that processes raw audio from **SDR++** and parses the
 data stream for the **DMR**, **NXDN**, and **P25** digital voice formats.
 
-It outputs formatted header data and **MBE codec frames** in both
+It outputs formatted header data, raw header HEX, and **MBE codec frames** in both
 **interleaved** (as transmitted) and **deinterleaved** (codec-ready) form
 through a dark-themed Tkinter GUI or a headless CLI.
 
@@ -18,6 +18,7 @@ through a dark-themed Tkinter GUI or a headless CLI.
 | **P25 Phase 1 decoding** | Frame sync, NID (NAC + DUID), HDU / LDU1 / LDU2 header parsing, nine IMBE frames per LDU |
 | **NXDN decoding** | Frame sync, LICH (RFCT / FT), RDCH header parsing (Dst/Src IDs, Msg Type), AMBE+2 frame extraction |
 | **MBE interleaving** | All frames displayed in both interleaved (OTA) and deinterleaved (codec-input) bit order |
+| **HEX output** | Raw protocol header bits and MBE frames are emitted as uppercase byte HEX strings (dsd-fme style) |
 | **Tkinter GUI** | Multi-tab dark UI: Headers table · MBE side-by-side viewer · Raw frame log |
 | **CLI / headless** | Stream-to-stdout mode for scripting and logging |
 | **File input** | Analyse saved WAV or raw PCM recordings |

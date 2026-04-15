@@ -327,7 +327,7 @@ class SDRParserApp(tk.Tk):
         )
         self._mbe_deinterleaved.pack(fill="both", expand=True, padx=4, pady=4)
 
-        self._mbe_frames_store: list[tuple[DecodedFrame, int]] = []
+        self._mbe_frames_store: list[tuple[DecodedFrame, object]] = []
 
     def _build_log_tab(self) -> None:
         f = self._tab_log
@@ -478,6 +478,9 @@ class SDRParserApp(tk.Tk):
 
         # Header table
         fields_str = "  |  ".join(f"{k}: {v}" for k, v in frame.header_fields)
+        header_hex = frame.header_hex()
+        if header_hex:
+            fields_str += f"  |  HeaderHEX: {header_hex}"
         tag = proto.lower()
         self._header_tree.insert(
             "", "end",
@@ -495,19 +498,15 @@ class SDRParserApp(tk.Tk):
 
         # MBE frames
         for mf in frame.mbe_frames:
-            entry_label = (
-                f"{self._mbe_index + 1}  "
-                f"[{proto} {mf.frame_type.name}]"
-            )
-            self._mbe_frames_store.append((frame, len(self._mbe_frames_store)))
+            self._mbe_frames_store.append((frame, mf))
             # Keep at most 200 stored frames
             if len(self._mbe_frames_store) > 200:
                 self._mbe_frames_store.pop(0)
             self._mbe_index += 1
 
             vals = ["Latest"] + [
-                f"{i + 1}  [{s.protocol} {mf.frame_type.name}]"
-                for i, (s, _) in enumerate(self._mbe_frames_store)
+                f"{i + 1}  [{stored_frame.protocol} {stored_mf.frame_type.name}]"
+                for i, (stored_frame, stored_mf) in enumerate(self._mbe_frames_store)
             ]
             self._mbe_index_cb.configure(values=vals)
 
@@ -517,6 +516,13 @@ class SDRParserApp(tk.Tk):
 
         # Raw log
         summary = frame.summary()
+        if header_hex:
+            summary += f" | HeaderHEX={header_hex}"
+        if frame.mbe_frames:
+            mbe_hexes = ", ".join(
+                mf.bits_hex("interleaved") for mf in frame.mbe_frames
+            )
+            summary += f" | MBEHEX={mbe_hexes}"
         self._raw_log.configure(state="normal")
         self._raw_log.insert("end", summary + "\n", tag)
         # Trim log
@@ -544,7 +550,20 @@ class SDRParserApp(tk.Tk):
     @staticmethod
     def _format_bits(bits: list, label: str) -> str:
         """Format a bit list as groups of 8, with hex and position markers."""
-        lines = [f"── {label} ({len(bits)} bits) ──\n"]
+        hex_bytes = []
+        for i in range(0, len(bits), 8):
+            chunk = bits[i:i + 8]
+            if len(chunk) < 8:
+                chunk = chunk + [0] * (8 - len(chunk))
+            byte_val = 0
+            for b in chunk:
+                byte_val = (byte_val << 1) | b
+            hex_bytes.append(f"{byte_val:02X}")
+
+        lines = [
+            f"── {label} ({len(bits)} bits) ──\n",
+            f"HEX: {' '.join(hex_bytes)}\n\n",
+        ]
         for i in range(0, len(bits), 8):
             chunk = bits[i:i + 8]
             bin_str = " ".join(str(b) for b in chunk)
@@ -574,9 +593,8 @@ class SDRParserApp(tk.Tk):
         try:
             idx = int(sel.split()[0]) - 1
             if 0 <= idx < len(self._mbe_frames_store):
-                frame, _ = self._mbe_frames_store[idx]
-                if frame.mbe_frames:
-                    self._show_mbe(frame, frame.mbe_frames[0])
+                frame, mf = self._mbe_frames_store[idx]
+                self._show_mbe(frame, mf)
         except (ValueError, IndexError):
             pass
 

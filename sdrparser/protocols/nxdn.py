@@ -272,5 +272,6 @@ class NXDNDecoder(ProtocolDecoder):
             kind=kind,
             header_fields=header,
             mbe_frames=mbe_frames,
+            raw_header_bits=lich_bits + rdch_bits[:48],
             raw_bits=frame,
         )

@@ -41,6 +41,9 @@ class DecodedFrame:
         Ordered list of ``(label, value)`` tuples for GUI display.
     mbe_frames:
         Zero, one, or two MBE codec frames carried in this burst.
+    raw_header_bits:
+        Header/control bits used to parse header_fields. This is emitted as
+        HEX for dsd-fme style inspection.
     raw_bits:
         The complete frame as a bit list (useful for debugging).
     """
@@ -49,12 +52,19 @@ class DecodedFrame:
     kind: FrameKind
     header_fields: List[tuple[str, str]] = field(default_factory=list)
     mbe_frames: List[MBEFrame] = field(default_factory=list)
+    raw_header_bits: List[int] = field(default_factory=list)
     raw_bits: List[int] = field(default_factory=list)
 
     def summary(self) -> str:
         """One-line human-readable summary of this frame."""
         fields = ", ".join(f"{k}={v}" for k, v in self.header_fields)
         return f"[{self.protocol}] {self.kind.name} | {fields}"
+
+    def header_hex(self) -> str:
+        """Return raw header bits as an uppercase HEX byte string."""
+        if not self.raw_header_bits:
+            return ""
+        return _bits_to_hex(self.raw_header_bits)
 
 
 # ---------------------------------------------------------------------------
@@ -111,3 +121,19 @@ class ProtocolDecoder:
     @staticmethod
     def _hamming_distance(a: List[int], b: List[int]) -> int:
         return sum(x != y for x, y in zip(a, b))
+
+
+def _bits_to_hex(bits: List[int]) -> str:
+    """Pack a bit list into a hexadecimal string (zero-padded to full bytes)."""
+    if not bits:
+        return ""
+
+    pad = (-len(bits)) % 8
+    padded = bits + [0] * pad
+    result: List[str] = []
+    for i in range(0, len(padded), 8):
+        byte_val = 0
+        for b in padded[i:i + 8]:
+            byte_val = (byte_val << 1) | (b & 1)
+        result.append(f"{byte_val:02X}")
+    return " ".join(result)

@@ -112,17 +112,34 @@ class SymbolDemodulator:
         self._thresh_low: float = -2.0 / 3.0
         self._thresh_mid: float = 0.0
 
+        self._filter_taps: np.ndarray | None = None
+        self._filter_zi: np.ndarray | None = None
+        if self.apply_filter:
+            cutoff = self.baud_rate * 0.75
+            nyq = self.sample_rate / 2.0
+            taps = scipy_signal.firwin(31, cutoff / nyq)
+            self._filter_taps = taps.astype(np.float32)
+            self._filter_zi = np.zeros(len(self._filter_taps) - 1, dtype=np.float32)
+
     # ------------------------------------------------------------------
     # Main processing entry point
     # ------------------------------------------------------------------
 
     def process(self, samples: np.ndarray) -> List[int]:
         """Append *samples* to the internal buffer and return new dibits."""
-        if self.apply_filter:
-            cutoff = self.baud_rate * 0.75
-            samples = _lowpass_filter(samples.astype(np.float32), cutoff,
-                                      self.sample_rate)
-        self._buf = np.concatenate((self._buf, samples.astype(np.float32)))
+        samples_f = samples.astype(np.float32, copy=False)
+        if self.apply_filter and self._filter_taps is not None and self._filter_zi is not None:
+            samples_f, self._filter_zi = scipy_signal.lfilter(
+                self._filter_taps,
+                1.0,
+                samples_f,
+                zi=self._filter_zi,
+            )
+
+        if self._buf.size == 0:
+            self._buf = samples_f.copy()
+        else:
+            self._buf = np.concatenate((self._buf, samples_f))
 
         dibits: List[int] = []
         while self._sym_phase < len(self._buf):
@@ -141,17 +158,17 @@ class SymbolDemodulator:
 
             norm = value / self._agc_max if self._agc_max > 1e-6 else 0.0
 
-            # Slice to symbol level (0–3)
+            # Slice directly to dibit value to avoid extra table lookup.
             if norm > self._thresh_high:
-                sym = 3   # +3 → dibit 01
+                dibit = 0b01
             elif norm > self._thresh_mid:
-                sym = 2   # +1 → dibit 00
+                dibit = 0b00
             elif norm > self._thresh_low:
-                sym = 1   # -1 → dibit 10
+                dibit = 0b10
             else:
-                sym = 0   # -3 → dibit 11
+                dibit = 0b11
 
-            dibits.append(DIBIT_MAP[sym])
+            dibits.append(dibit)
 
             self._sym_phase += self.sps
 
@@ -168,6 +185,8 @@ class SymbolDemodulator:
         self._buf = np.array([], dtype=np.float32)
         self._sym_phase = self.sps / 2.0
         self._agc_max = 1.0
+        if self._filter_zi is not None:
+            self._filter_zi.fill(0.0)
 
 
 # ---------------------------------------------------------------------------

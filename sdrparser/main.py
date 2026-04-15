@@ -108,8 +108,11 @@ class SDRParserPipeline:
                 continue
             self._bit_buf.push_dibits(dibits)
             bits = self._bit_buf.consume(self._bit_buf.bits_available())
+            if not bits:
+                continue
+            bits_list = list(bits)
             for decoder in self._decoders:
-                frames = decoder.push_bits(list(bits))
+                frames = decoder.push_bits(bits_list)
                 for frame in frames:
                     try:
                         self.on_frame(frame)

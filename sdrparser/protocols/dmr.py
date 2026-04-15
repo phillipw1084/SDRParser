@@ -291,6 +291,7 @@ class DMRDecoder(ProtocolDecoder):
             kind=FrameKind.VOICE,
             header_fields=header,
             mbe_frames=[mbe1, mbe2],
+            raw_header_bits=lc_bits,
             raw_bits=burst,
         )
 
@@ -315,5 +316,6 @@ class DMRDecoder(ProtocolDecoder):
             kind=FrameKind.DATA,
             header_fields=header,
             mbe_frames=[],
+            raw_header_bits=data_bits,
             raw_bits=burst,
         )

@@ -296,6 +296,7 @@ class P25Decoder(ProtocolDecoder):
                 kind=FrameKind.CONTROL,
                 header_fields=base_fields + [("Info", "Call terminator")],
                 mbe_frames=[],
+                raw_header_bits=header_bits,
                 raw_bits=header_bits,
             )
 
@@ -304,6 +305,7 @@ class P25Decoder(ProtocolDecoder):
             kind=FrameKind.DATA,
             header_fields=base_fields,
             mbe_frames=[],
+            raw_header_bits=header_bits,
             raw_bits=header_bits,
         )
 
@@ -319,6 +321,7 @@ class P25Decoder(ProtocolDecoder):
                 kind=FrameKind.HEADER,
                 header_fields=base_fields + [("Info", "HDU (partial)")],
                 mbe_frames=[],
+                raw_header_bits=header_bits,
                 raw_bits=header_bits,
             )
         payload = self._buf.consume(HDU_PAYLOAD_BITS)
@@ -329,6 +332,7 @@ class P25Decoder(ProtocolDecoder):
             kind=FrameKind.HEADER,
             header_fields=base_fields + hdu_fields,
             mbe_frames=[],
+            raw_header_bits=header_bits + payload,
             raw_bits=header_bits + payload,
         )
 
@@ -345,6 +349,7 @@ class P25Decoder(ProtocolDecoder):
                 kind=FrameKind.VOICE,
                 header_fields=base_fields + [("Info", "LDU (partial)")],
                 mbe_frames=[],
+                raw_header_bits=header_bits,
                 raw_bits=header_bits,
             )
 
@@ -365,10 +370,12 @@ class P25Decoder(ProtocolDecoder):
         if duid == DUID_LDU1:
             lc_fields = _parse_ldu1_lc(trailer[:72])
             header_fields = base_fields + lc_fields
+            raw_header_bits = header_bits + trailer[:72]
             kind = FrameKind.VOICE
         else:
             enc_fields = _parse_ldu2_enc(trailer[:96])
             header_fields = base_fields + enc_fields
+            raw_header_bits = header_bits + trailer[:96]
             kind = FrameKind.VOICE
 
         return DecodedFrame(
@@ -376,5 +383,6 @@ class P25Decoder(ProtocolDecoder):
             kind=kind,
             header_fields=header_fields,
             mbe_frames=mbe_frames,
+            raw_header_bits=raw_header_bits,
             raw_bits=header_bits + payload,
         )
