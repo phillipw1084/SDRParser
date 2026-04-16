@@ -237,6 +237,68 @@ class BitStreamBuffer:
                 return i
         return -1
 
+    def find_pattern_approx(self, pattern: List[int], max_errors: int) -> int:
+        """Return first position where *pattern* matches within Hamming threshold."""
+        plen = len(pattern)
+        bits = self._bits
+        blen = len(bits)
+        if plen == 0 or blen < plen:
+            return -1
+
+        pat_int = bits_to_int(pattern)
+        mask = (1 << plen) - 1
+
+        win = 0
+        for b in bits[:plen]:
+            win = ((win << 1) | (b & 1)) & mask
+
+        for i in range(blen - plen + 1):
+            if (win ^ pat_int).bit_count() <= max_errors:
+                return i
+            if i + plen < blen:
+                win = ((win << 1) & mask) | (bits[i + plen] & 1)
+        return -1
+
+    def find_best_pattern_approx(
+        self,
+        patterns: List[List[int]],
+        max_errors: int,
+    ) -> tuple[int, int, int]:
+        """Return (position, pattern_index, errors) of the best approximate sync."""
+        if not patterns:
+            return -1, -1, max_errors + 1
+
+        plen = len(patterns[0])
+        bits = self._bits
+        blen = len(bits)
+        if plen == 0 or blen < plen:
+            return -1, -1, max_errors + 1
+
+        pat_ints = [bits_to_int(p) for p in patterns]
+        mask = (1 << plen) - 1
+
+        win = 0
+        for b in bits[:plen]:
+            win = ((win << 1) | (b & 1)) & mask
+
+        best_pos = -1
+        best_pat = -1
+        best_err = max_errors + 1
+
+        for i in range(blen - plen + 1):
+            for j, pat in enumerate(pat_ints):
+                errs = (win ^ pat).bit_count()
+                if errs < best_err and errs <= max_errors:
+                    best_pos = i
+                    best_pat = j
+                    best_err = errs
+                    if errs == 0:
+                        return best_pos, best_pat, best_err
+            if i + plen < blen:
+                win = ((win << 1) & mask) | (bits[i + plen] & 1)
+
+        return best_pos, best_pat, best_err
+
     def consume(self, n: int) -> List[int]:
         """Remove and return the first *n* bits."""
         result = self._bits[:n]

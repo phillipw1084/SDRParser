@@ -192,21 +192,10 @@ class NXDNDecoder(ProtocolDecoder):
         return frames
 
     def _try_decode(self) -> Optional[DecodedFrame]:
-        best_pos  = -1
-        best_sync = None
-        best_errs = self.max_sync_errors + 1
-
-        for sync in ALL_SYNCS:
-            pos = self._find_sync_approx(sync)
-            if pos < 0:
-                continue
-            errs = sum(
-                a != b for a, b in zip(sync, self._buf.peek(pos, len(sync)))
-            )
-            if errs < best_errs:
-                best_errs = errs
-                best_pos  = pos
-                best_sync = sync
+        best_pos, best_idx, _best_err = self._buf.find_best_pattern_approx(
+            list(ALL_SYNCS), self.max_sync_errors
+        )
+        best_sync = ALL_SYNCS[best_idx] if best_idx >= 0 else None
 
         if best_pos < 0 or best_sync is None:
             return None
@@ -217,16 +206,6 @@ class NXDNDecoder(ProtocolDecoder):
         self._buf.consume(best_pos)
         frame_bits = self._buf.consume(FRAME_BITS)
         return self._decode_frame(frame_bits, best_sync)
-
-    def _find_sync_approx(self, pattern: List[int]) -> int:
-        plen  = len(pattern)
-        avail = self._buf.bits_available()
-        for i in range(avail - plen + 1):
-            window = self._buf.peek(i, plen)
-            errs   = sum(a != b for a, b in zip(pattern, window))
-            if errs <= self.max_sync_errors:
-                return i
-        return -1
 
     def _decode_frame(
         self, frame: List[int], sync_pattern: List[int]

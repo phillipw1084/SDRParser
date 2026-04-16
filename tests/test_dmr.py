@@ -12,6 +12,12 @@ from sdrparser.protocols.dmr import (
     SYNC_OFFSET,
     _parse_lc,
     _parse_csbk,
+    _bptc_deinterleave_196,
+    _bptc_extract_96,
+    _bptc_extract_96_corrected,
+    _hamming_13_9_correct,
+    _crc16_ccitt_dmr,
+    _hamming_15_11_correct,
 )
 from sdrparser.protocols.base import FrameKind
 from sdrparser.dsp.demod import bits_to_int
@@ -104,14 +110,14 @@ class TestDMRDecoder(unittest.TestCase):
         self.assertTrue(len(voice_frames) >= 1,
                         msg=f"Expected a VOICE frame, got: {frames}")
 
-    def test_returns_two_mbe_frames_per_voice_burst(self):
+    def test_returns_three_mbe_frames_per_voice_burst(self):
         dec = self._make_decoder()
         burst = _make_voice_burst(sync=BS_VOICE_SYNC)
         frames = dec.push_bits(burst)
         voice = [f for f in frames if f.kind == FrameKind.VOICE]
         self.assertGreater(len(voice), 0)
-        self.assertEqual(len(voice[0].mbe_frames), 2,
-                         msg="Each DMR voice burst must carry 2 AMBE+2 frames")
+        self.assertEqual(len(voice[0].mbe_frames), 3,
+                         msg="Each DMR voice payload burst should carry 3 AMBE+2 frames")
 
     def test_mbe_frames_have_correct_length(self):
         dec = self._make_decoder()
@@ -160,6 +166,45 @@ class TestDMRDecoder(unittest.TestCase):
         self.assertGreaterEqual(len(voice), 3,
                                 msg="Expected one voice frame per burst")
 
+
+class TestDMRBPTCHelpers(unittest.TestCase):
+    def test_bptc_deinterleave_length(self):
+        data = [0] * 196
+        out = _bptc_deinterleave_196(data)
+        self.assertEqual(len(out), 196)
+
+    def test_bptc_extract_96_length(self):
+        out = _bptc_extract_96([0] * 196)
+        self.assertEqual(len(out), 96)
+
+    def test_bptc_extract_96_corrected_length(self):
+        out, ok = _bptc_extract_96_corrected([0] * 196)
+        self.assertTrue(ok)
+        self.assertEqual(len(out), 96)
+
+
+class TestDMRFECAndCRC(unittest.TestCase):
+    def test_hamming_13_9_corrects_single_bit_error(self):
+        # All-zero codeword is valid; single-bit flips should be corrected.
+        cw = [0] * 13
+        cw[4] = 1
+        data, ok = _hamming_13_9_correct(cw)
+        self.assertTrue(ok)
+        self.assertEqual(data, [0] * 9)
+
+    def test_hamming_15_11_corrects_single_bit_error(self):
+        # All-zero 15-bit codeword is valid; single-bit flips should be corrected.
+        cw = [0] * 15
+        cw[7] = 1
+        data, ok = _hamming_15_11_correct(cw)
+        self.assertTrue(ok)
+        self.assertEqual(data, [0] * 11)
+
+    def test_crc16_changes_when_payload_changes(self):
+        a = [0] * 80
+        b = [0] * 80
+        b[10] = 1
+        self.assertNotEqual(_crc16_ccitt_dmr(a), _crc16_ccitt_dmr(b))
 
 if __name__ == "__main__":
     unittest.main()

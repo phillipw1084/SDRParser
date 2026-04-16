@@ -74,6 +74,18 @@ python run.py
 python run.py --source tcp --host 127.0.0.1 --port 7355
 ```
 
+### Parse a direct TCP dibit/bitstream feed
+
+Use this when your upstream tool sends already-demodulated dibits/bits and
+you want SDRParser to only perform protocol framing and header/voice payload
+reassembly:
+
+```bash
+python run.py --source tcp-bits --host 127.0.0.1 --port 7355 --bit-format auto
+```
+
+`--bit-format` accepts `auto`, `ascii-bits`, `dibit-bytes`, or `packed-dibits`.
+
 ### Listen for SDR++ UDP datagrams
 
 ```bash
@@ -90,6 +102,27 @@ python run.py --source file --file recording.wav
 
 ```bash
 python run.py --source tcp --protocols DMR
+```
+
+### Use dsd-fme as decoder backend (recommended for exact parity)
+
+This mode runs dsd-fme directly and filters its output to only:
+
+* transmission header lines
+* AMBE/IMBE vocoder hex frames
+
+```bash
+python run.py \
+  --backend dsd-fme \
+  --dsd-fme-cmd "dsd-fme <your-normal-dsd-fme-args>"
+```
+
+Example using a WAV input passed to dsd-fme:
+
+```bash
+python run.py \
+  --backend dsd-fme \
+  --dsd-fme-cmd "dsd-fme -r recording.wav"
 ```
 
 ### NXDN 6.25 kHz (2 400 baud) narrow-band mode

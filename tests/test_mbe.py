@@ -12,7 +12,9 @@ from sdrparser.mbe.frames import (
     _NXDN_AMBE2_TABLE,
     _P25_IMBE_TABLE,
     _bits_to_hex,
+    bits_to_hex_compact,
 )
+from sdrparser.protocols.base import DecodedFrame, FrameKind
 
 
 class TestTableLengths(unittest.TestCase):
@@ -82,8 +84,10 @@ class TestMBEFrameFactory(unittest.TestCase):
         mf = MBEFrame.from_interleaved("DMR", MBEType.AMBE2, 0, bits)
         self.assertEqual(len(mf.interleaved_bits), 72)
         self.assertEqual(len(mf.deinterleaved_bits), 72)
-        # Re-interleaving the deinterleaved bits must give back the original
-        reinterleaved = interleave(mf.deinterleaved_bits, _DMR_AMBE2_TABLE)
+        # DMR uses custom AMBE placement schedule mirroring dsd-fme.
+        reinterleaved = MBEFrame.from_deinterleaved(
+            "DMR", MBEType.AMBE2, 0, mf.deinterleaved_bits
+        ).interleaved_bits
         self.assertEqual(reinterleaved, bits)
 
     def test_from_deinterleaved_p25(self):
@@ -124,6 +128,20 @@ class TestBitsToHex(unittest.TestCase):
         bits = [0] * 8 + [1] * 8
         self.assertEqual(_bits_to_hex(bits), "00 FF")
 
+    def test_compact_hex(self):
+        bits = [0] * 8 + [1] * 8
+        self.assertEqual(bits_to_hex_compact(bits), "00FF")
+
+
+class TestDecodedFrameHex(unittest.TestCase):
+    def test_header_hex_compact(self):
+        frame = DecodedFrame(
+            protocol="DMR",
+            kind=FrameKind.HEADER,
+            raw_header_bits=[0] * 8 + [1] * 8,
+        )
+        self.assertEqual(frame.header_hex_compact(), "00FF")
+
 
 class TestMBEFrameBitStrings(unittest.TestCase):
     def test_bits_str_interleaved(self):
@@ -139,6 +157,21 @@ class TestMBEFrameBitStrings(unittest.TestCase):
         # All zeros → all "00" bytes
         for tok in h.split():
             self.assertEqual(tok, "00")
+
+    def test_bits_hex_compact(self):
+        bits = [0] * 72
+        mf = MBEFrame.from_interleaved("DMR", MBEType.AMBE2, 0, bits)
+        self.assertEqual(mf.bits_hex_compact("interleaved"), "000000000000000000")
+
+    def test_ambe49_hex_zero(self):
+        bits = [0] * 72
+        mf = MBEFrame.from_deinterleaved("DMR", MBEType.AMBE2, 0, bits)
+        self.assertEqual(mf.ambe_hex_49(), "00000000000000")
+
+    def test_ambe49_hex_short(self):
+        bits = [0] * 72
+        mf = MBEFrame.from_deinterleaved("DMR", MBEType.AMBE2, 0, bits)
+        self.assertEqual(mf.ambe_hex_49_short(), "000000000000")
 
 
 if __name__ == "__main__":

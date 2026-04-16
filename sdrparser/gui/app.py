@@ -23,12 +23,13 @@ from typing import Optional
 
 from sdrparser.audio.input import (
     TCPClientSource,
+    TCPBitstreamSource,
     UDPSource,
     FileSource,
     DEFAULT_PORT,
     DEFAULT_SAMPLE_RATE,
 )
-from sdrparser.main import SDRParserPipeline
+from sdrparser.main import SDRParserPipeline, BitstreamParserPipeline
 from sdrparser.protocols.base import DecodedFrame, FrameKind
 
 # ---------------------------------------------------------------------------
@@ -82,10 +83,11 @@ class SDRParserApp(tk.Tk):
         self.configure(bg=BG_DARK)
         self.minsize(900, 580)
 
-        self._pipeline: Optional[SDRParserPipeline] = None
+        self._pipeline: Optional[object] = None
         self._frame_queue: queue.Queue[DecodedFrame] = queue.Queue(maxsize=256)
         self._frame_count = 0
         self._mbe_index   = 0
+        self._last_mbe_render_frame = 0
 
         # Tkinter variables
         self._var_source   = tk.StringVar(value="TCP Client")
@@ -122,7 +124,7 @@ class SDRParserApp(tk.Tk):
                  font=LABEL_FONT).pack(side="left", padx=(0, 4))
         src_cb = ttk.Combobox(
             r1, textvariable=self._var_source, width=12,
-            values=["TCP Client", "UDP Listener", "File"],
+            values=["TCP Client", "TCP Bitstream", "UDP Listener", "File"],
             state="readonly",
         )
         src_cb.pack(side="left", padx=(0, 8))
@@ -394,20 +396,38 @@ class SDRParserApp(tk.Tk):
         try:
             if src_name == "TCP Client":
                 source = TCPClientSource(host=host, port=port, sample_rate=sr)
+                self._pipeline = SDRParserPipeline(
+                    source=source,
+                    on_frame=self._on_frame,
+                    baud_rate=baud,
+                    enabled_protocols=protos,
+                )
+            elif src_name == "TCP Bitstream":
+                source = TCPBitstreamSource(host=host, port=port, wire_format="auto")
+                self._pipeline = BitstreamParserPipeline(
+                    source=source,
+                    on_frame=self._on_frame,
+                    enabled_protocols=protos,
+                )
             elif src_name == "UDP Listener":
                 source = UDPSource(bind_host="0.0.0.0", port=port, sample_rate=sr)
+                self._pipeline = SDRParserPipeline(
+                    source=source,
+                    on_frame=self._on_frame,
+                    baud_rate=baud,
+                    enabled_protocols=protos,
+                )
             else:
                 source = FileSource(path=host, sample_rate=sr)
+                self._pipeline = SDRParserPipeline(
+                    source=source,
+                    on_frame=self._on_frame,
+                    baud_rate=baud,
+                    enabled_protocols=protos,
+                )
         except Exception as exc:
             self._var_status.set(f"⚠ {exc}")
             return
-
-        self._pipeline = SDRParserPipeline(
-            source=source,
-            on_frame=self._on_frame,
-            baud_rate=baud,
-            enabled_protocols=protos,
-        )
         self._pipeline.start()
 
         self._connect_btn.config(text="■  Disconnect", bg=FG_WARN)
@@ -439,6 +459,7 @@ class SDRParserApp(tk.Tk):
         # Counters
         self._frame_count = 0
         self._mbe_index   = 0
+        self._last_mbe_render_frame = 0
         self._var_frames.set("Frames: 0")
 
     # ------------------------------------------------------------------
@@ -466,6 +487,12 @@ class SDRParserApp(tk.Tk):
     # ------------------------------------------------------------------
 
     def _display_frame(self, frame: DecodedFrame) -> None:
+        # Drop noisy/untrusted DMR data bursts; keep trusted headers + voice.
+        if frame.protocol == "DMR" and frame.kind == FrameKind.DATA:
+            fields = dict(frame.header_fields)
+            if fields.get("Data") == "Decode untrusted":
+                return
+
         self._frame_count += 1
         self._var_frames.set(f"Frames: {self._frame_count}")
 
@@ -478,7 +505,7 @@ class SDRParserApp(tk.Tk):
 
         # Header table
         fields_str = "  |  ".join(f"{k}: {v}" for k, v in frame.header_fields)
-        header_hex = frame.header_hex()
+        header_hex = frame.header_hex_compact()
         if header_hex:
             fields_str += f"  |  HeaderHEX: {header_hex}"
         tag = proto.lower()
@@ -497,12 +524,15 @@ class SDRParserApp(tk.Tk):
             self._header_tree.see(children[-1])
 
         # MBE frames
-        for mf in frame.mbe_frames:
-            self._mbe_frames_store.append((frame, mf))
-            # Keep at most 200 stored frames
-            if len(self._mbe_frames_store) > 200:
-                self._mbe_frames_store.pop(0)
-            self._mbe_index += 1
+        latest_pair = None
+        if frame.mbe_frames:
+            for mf in frame.mbe_frames:
+                self._mbe_frames_store.append((frame, mf))
+                latest_pair = (frame, mf)
+                # Keep at most 200 stored frames
+                if len(self._mbe_frames_store) > 200:
+                    self._mbe_frames_store.pop(0)
+                self._mbe_index += 1
 
             vals = ["Latest"] + [
                 f"{i + 1}  [{stored_frame.protocol} {stored_mf.frame_type.name}]"
@@ -510,19 +540,30 @@ class SDRParserApp(tk.Tk):
             ]
             self._mbe_index_cb.configure(values=vals)
 
-            # Auto-display if "Latest" is selected
-            if self._var_mbe_sel.get() == "Latest":
-                self._show_mbe(frame, mf)
+            # Auto-display in Latest mode, but throttle expensive text re-rendering.
+            if (
+                self._var_mbe_sel.get() == "Latest"
+                and latest_pair is not None
+                and (self._frame_count - self._last_mbe_render_frame) >= 3
+            ):
+                self._show_mbe(*latest_pair)
+                self._last_mbe_render_frame = self._frame_count
 
         # Raw log
-        summary = frame.summary()
+        summary = f"[{frame.protocol}] {frame.kind.name}"
         if header_hex:
-            summary += f" | HeaderHEX={header_hex}"
+            # Keep raw log narrow: only compact header hex + compact vocoder hex.
+            summary += f" | HDR={header_hex}"
         if frame.mbe_frames:
             mbe_hexes = ", ".join(
-                mf.bits_hex("interleaved") for mf in frame.mbe_frames
+                (
+                    f"A49={mf.ambe_hex_49_short()}"
+                    if mf.frame_type.name == "AMBE2" and mf.ambe_hex_49()
+                    else mf.bits_hex_compact("interleaved")
+                )
+                for mf in frame.mbe_frames
             )
-            summary += f" | MBEHEX={mbe_hexes}"
+            summary += f" | VOC={mbe_hexes}"
         self._raw_log.configure(state="normal")
         self._raw_log.insert("end", summary + "\n", tag)
         # Trim log

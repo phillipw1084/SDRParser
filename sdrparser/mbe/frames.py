@@ -101,6 +101,85 @@ FRAME_BITS = {
 }
 
 
+# DMR AMBE bit placement schedule (mirrors dsd-fme dmr_const.h rW/rX/rY/rZ).
+_DMR_RW: List[int] = [
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 2,
+    0, 2, 0, 2, 0, 2,
+    0, 2, 0, 2, 0, 2,
+]
+_DMR_RX: List[int] = [
+    23, 10, 22, 9, 21, 8,
+    20, 7, 19, 6, 18, 5,
+    17, 4, 16, 3, 15, 2,
+    14, 1, 13, 0, 12, 10,
+    11, 9, 10, 8, 9, 7,
+    8, 6, 7, 5, 6, 4,
+]
+_DMR_RY: List[int] = [
+    0, 2, 0, 2, 0, 2,
+    0, 2, 0, 3, 0, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+    1, 3, 1, 3, 1, 3,
+]
+_DMR_RZ: List[int] = [
+    5, 3, 4, 2, 3, 1,
+    2, 0, 1, 13, 0, 12,
+    22, 11, 21, 10, 20, 9,
+    19, 8, 18, 7, 17, 6,
+    16, 5, 15, 4, 14, 3,
+    13, 2, 12, 1, 11, 0,
+]
+
+
+def _dmr_deinterleave_ambe72(interleaved: List[int]) -> List[int]:
+    """Convert 72 interleaved DMR bits into AMBE row-segment order.
+
+    Output order matches AMBE rows used by dsd-fme codeword handling:
+    row0[24] + row1[23] + row2[11] + row3[14] = 72 bits.
+    """
+    if len(interleaved) != 72:
+        raise ValueError(f"DMR interleaved length {len(interleaved)} != 72")
+
+    ambe = [[0] * 24 for _ in range(4)]
+    for i in range(36):
+        ambe[_DMR_RW[i]][_DMR_RX[i]] = interleaved[(i * 2) + 0] & 1
+        ambe[_DMR_RY[i]][_DMR_RZ[i]] = interleaved[(i * 2) + 1] & 1
+
+    return ambe[0][0:24] + ambe[1][0:23] + ambe[2][0:11] + ambe[3][0:14]
+
+
+def _dmr_interleave_ambe72(deinterleaved: List[int]) -> List[int]:
+    """Inverse of _dmr_deinterleave_ambe72."""
+    if len(deinterleaved) != 72:
+        raise ValueError(f"DMR deinterleaved length {len(deinterleaved)} != 72")
+
+    ambe = [[0] * 24 for _ in range(4)]
+    k = 0
+    for c in range(24):
+        ambe[0][c] = deinterleaved[k] & 1
+        k += 1
+    for c in range(23):
+        ambe[1][c] = deinterleaved[k] & 1
+        k += 1
+    for c in range(11):
+        ambe[2][c] = deinterleaved[k] & 1
+        k += 1
+    for c in range(14):
+        ambe[3][c] = deinterleaved[k] & 1
+        k += 1
+
+    interleaved = [0] * 72
+    for i in range(36):
+        interleaved[(i * 2) + 0] = ambe[_DMR_RW[i]][_DMR_RX[i]]
+        interleaved[(i * 2) + 1] = ambe[_DMR_RY[i]][_DMR_RZ[i]]
+    return interleaved
+
+
 # ---------------------------------------------------------------------------
 # Core interleave / deinterleave functions
 # ---------------------------------------------------------------------------
@@ -207,8 +286,11 @@ class MBEFrame:
         The bits are deinterleaved automatically using the correct table
         for *protocol*.
         """
-        table = INTERLEAVE_TABLES[protocol]
-        deinterleaved = deinterleave(bits, table)
+        if protocol == "DMR" and frame_type == MBEType.AMBE2:
+            deinterleaved = _dmr_deinterleave_ambe72(bits)
+        else:
+            table = INTERLEAVE_TABLES[protocol]
+            deinterleaved = deinterleave(bits, table)
         return cls(
             protocol=protocol,
             frame_type=frame_type,
@@ -226,8 +308,11 @@ class MBEFrame:
         bits: List[int],
     ) -> "MBEFrame":
         """Build an MBEFrame from codec-order *bits* (e.g., for test injection)."""
-        table = INTERLEAVE_TABLES[protocol]
-        interleaved_bits = interleave(bits, table)
+        if protocol == "DMR" and frame_type == MBEType.AMBE2:
+            interleaved_bits = _dmr_interleave_ambe72(bits)
+        else:
+            table = INTERLEAVE_TABLES[protocol]
+            interleaved_bits = interleave(bits, table)
         return cls(
             protocol=protocol,
             frame_type=frame_type,
@@ -258,6 +343,42 @@ class MBEFrame:
                 else self.deinterleaved_bits)
         return "".join(str(b) for b in bits)
 
+    def bits_hex_compact(self, which: str = "deinterleaved") -> str:
+        """Return bits as uppercase HEX without spaces."""
+        return self.bits_hex(which).replace(" ", "")
+
+    def ambe_hex_49(self) -> str:
+        """Return dsd-fme style AMBE 49-bit HEX (14 hex chars).
+
+        dsd-fme derives this from AMBE rows c0/c1/v2/v3 and left-shifts by 7.
+        Only valid for AMBE2 frames (DMR/NXDN).
+        """
+        if self.frame_type != MBEType.AMBE2 or len(self.deinterleaved_bits) != 72:
+            return ""
+
+        fr0 = self.deinterleaved_bits[0:24]
+        fr1 = self.deinterleaved_bits[24:47]
+        fr2 = self.deinterleaved_bits[47:58]
+        fr3 = self.deinterleaved_bits[58:72]
+
+        c0 = _bits_to_int(fr0[::-1][:12])
+        c1 = _bits_to_int(fr1[::-1][:12])
+        v2 = _bits_to_int(fr2)
+        v3 = _bits_to_int(fr3)
+
+        hex49 = (
+            ((c0 & 0xFFF) << 37)
+            | ((c1 & 0xFFF) << 25)
+            | ((v2 & 0x7FF) << 14)
+            | (v3 & 0x3FFF)
+        )
+        return f"{(hex49 << 7):014X}"
+
+    def ambe_hex_49_short(self) -> str:
+        """Return 12-hex shortened AMBE display (drop final pad byte)."""
+        full = self.ambe_hex_49()
+        return full[:-2] if len(full) == 14 else full
+
     def __repr__(self) -> str:
         return (
             f"MBEFrame(protocol={self.protocol!r}, type={self.frame_type.name}, "
@@ -283,3 +404,16 @@ def _bits_to_hex(bits: List[int]) -> str:
             byte_val = (byte_val << 1) | (b & 1)
         result.append(f"{byte_val:02X}")
     return " ".join(result)
+
+
+def bits_to_hex_compact(bits: List[int]) -> str:
+    """Pack bits into uppercase HEX without spaces (dsd-fme style)."""
+    return _bits_to_hex(bits).replace(" ", "")
+
+
+def _bits_to_int(bits: List[int]) -> int:
+    """Convert MSB-first bits to int."""
+    out = 0
+    for b in bits:
+        out = (out << 1) | (b & 1)
+    return out

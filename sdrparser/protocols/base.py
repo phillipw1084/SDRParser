@@ -66,6 +66,10 @@ class DecodedFrame:
             return ""
         return _bits_to_hex(self.raw_header_bits)
 
+    def header_hex_compact(self) -> str:
+        """Return raw header bits as compact uppercase HEX (no spaces)."""
+        return self.header_hex().replace(" ", "")
+
 
 # ---------------------------------------------------------------------------
 # Base decoder

@@ -24,7 +24,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Generator, List, Optional
 
 import numpy as np
 
@@ -84,6 +84,151 @@ class AudioSource(ABC):
         samples = np.frombuffer(raw, dtype="<i2").astype(np.float32)
         samples /= 32768.0
         return samples
+
+
+class BitStreamSource(ABC):
+    """Abstract base for bitstream sources.
+
+    Sub-classes yield lists of binary bits (0/1) that are already demodulated
+    from RF symbols.
+    """
+
+    def __init__(self) -> None:
+        self._running = False
+
+    def start(self) -> None:
+        self._running = True
+
+    def stop(self) -> None:
+        self._running = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @abstractmethod
+    def read_bits(self) -> Generator[List[int], None, None]:
+        """Yield chunks of bits (0/1)."""
+        ...
+
+
+class TCPBitstreamSource(BitStreamSource):
+    """Receive pre-demodulated bit or dibit streams over TCP.
+
+    Supported wire formats
+    ----------------------
+    * ``auto``: infer from payload
+    * ``ascii-bits``: bytes containing ASCII ``0``/``1`` (whitespace ignored)
+    * ``dibit-bytes``: one dibit per byte, values 0..3
+    * ``packed-dibits``: four dibits packed per byte, MSB dibit first
+    """
+
+    def __init__(
+        self,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        wire_format: str = "auto",
+        recv_bytes: int = 4096,
+        reconnect_delay: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.host = host
+        self.port = port
+        self.wire_format = wire_format
+        self.recv_bytes = recv_bytes
+        self.reconnect_delay = reconnect_delay
+        self._sock: Optional[socket.socket] = None
+
+    def stop(self) -> None:
+        super().stop()
+        if self._sock:
+            try:
+                self._sock.shutdown(socket.SHUT_RDWR)
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+
+    def _connect(self) -> bool:
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect((self.host, self.port))
+            sock.settimeout(None)
+            self._sock = sock
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _dibit_to_bits(dibit: int) -> List[int]:
+        return [((dibit >> 1) & 1), (dibit & 1)]
+
+    def _decode_bytes(self, raw: bytes) -> List[int]:
+        if not raw:
+            return []
+
+        fmt = self.wire_format
+        if fmt == "auto":
+            ascii_set = {9, 10, 13, 32, 48, 49}
+            if all(b in ascii_set for b in raw):
+                fmt = "ascii-bits"
+            elif all(b <= 3 for b in raw):
+                fmt = "dibit-bytes"
+            else:
+                fmt = "packed-dibits"
+
+        out: List[int] = []
+        if fmt == "ascii-bits":
+            for b in raw:
+                if b == 48:
+                    out.append(0)
+                elif b == 49:
+                    out.append(1)
+        elif fmt == "dibit-bytes":
+            for b in raw:
+                out.extend(self._dibit_to_bits(b & 0x3))
+        elif fmt == "packed-dibits":
+            for b in raw:
+                out.extend(self._dibit_to_bits((b >> 6) & 0x3))
+                out.extend(self._dibit_to_bits((b >> 4) & 0x3))
+                out.extend(self._dibit_to_bits((b >> 2) & 0x3))
+                out.extend(self._dibit_to_bits(b & 0x3))
+        else:
+            raise ValueError(f"Unsupported TCP bitstream wire format: {fmt}")
+
+        return out
+
+    def read_bits(self) -> Generator[List[int], None, None]:
+        while self._running:
+            if self._sock is None and not self._connect():
+                time.sleep(self.reconnect_delay)
+                continue
+
+            try:
+                raw = self._sock.recv(self.recv_bytes)
+            except OSError:
+                raw = b""
+
+            if not raw:
+                if self._sock:
+                    try:
+                        self._sock.close()
+                    except OSError:
+                        pass
+                self._sock = None
+                time.sleep(self.reconnect_delay)
+                continue
+
+            bits = self._decode_bytes(raw)
+            if bits:
+                yield bits
 
 
 # ---------------------------------------------------------------------------

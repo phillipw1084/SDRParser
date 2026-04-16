@@ -259,14 +259,7 @@ class P25Decoder(ProtocolDecoder):
         return self._decode_payload(nac, duid, sync_bits + nid_bits)
 
     def _find_sync(self) -> int:
-        plen = P25_SYNC_LEN
-        avail = self._buf.bits_available()
-        for i in range(avail - plen + 1):
-            window = self._buf.peek(i, plen)
-            errs   = sum(a != b for a, b in zip(P25_SYNC, window))
-            if errs <= self.max_sync_errors:
-                return i
-        return -1
+        return self._buf.find_pattern_approx(P25_SYNC, self.max_sync_errors)
 
     def _decode_payload(
         self,

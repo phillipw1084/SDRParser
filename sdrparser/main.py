@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import Callable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
-from sdrparser.audio.input import AudioSource, TCPClientSource, UDPSource
+from sdrparser.audio.input import AudioSource, BitStreamSource
 from sdrparser.dsp.demod import SymbolDemodulator, BitStreamBuffer
 from sdrparser.protocols.base import DecodedFrame
 from sdrparser.protocols.dmr import DMRDecoder
@@ -111,6 +111,72 @@ class SDRParserPipeline:
             if not bits:
                 continue
             bits_list = list(bits)
+            for decoder in self._decoders:
+                frames = decoder.push_bits(bits_list)
+                for frame in frames:
+                    try:
+                        self.on_frame(frame)
+                    except Exception:
+                        pass
+
+
+class BitstreamParserPipeline:
+    """Parse pre-demodulated bit/dibit streams directly.
+
+    This pipeline is used when input is already a bitstream (for example from
+    a TCP dibit feed) and therefore skips audio DSP/symbol slicing entirely.
+    """
+
+    def __init__(
+        self,
+        source: BitStreamSource,
+        on_frame: FrameCallback,
+        enabled_protocols: Optional[List[str]] = None,
+    ) -> None:
+        self.source = source
+        self.on_frame = on_frame
+
+        if enabled_protocols is None:
+            enabled_protocols = ["DMR", "P25", "NXDN"]
+
+        self._decoders: List = []
+        if "DMR" in enabled_protocols:
+            self._decoders.append(DMRDecoder())
+        if "P25" in enabled_protocols:
+            self._decoders.append(P25Decoder())
+        if "NXDN" in enabled_protocols:
+            self._decoders.append(NXDNDecoder())
+
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self.source.start()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="sdrparser-bitstream-pipeline"
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        self.source.stop()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def _run(self) -> None:
+        for chunk in self.source.read_bits():
+            if not self._running:
+                break
+            if not chunk:
+                continue
+            bits_list = list(chunk)
             for decoder in self._decoders:
                 frames = decoder.push_bits(bits_list)
                 for frame in frames:
